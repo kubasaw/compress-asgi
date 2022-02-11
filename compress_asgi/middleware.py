@@ -37,8 +37,7 @@ class GzipCompressor(Compressor):
             self.file.close()
 
         compressedData = self.buffer.getvalue()
-        self.buffer.seek(0)
-        self.buffer.truncate()
+        self.buffer.truncate(0)
 
         return compressedData
 
