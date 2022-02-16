@@ -1,0 +1,24 @@
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+[tool.black]
+preview = true
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = "E203,W503"
+max-complexity = 10
+
+[tool.pytest.ini_options]
+testpaths = ['tests']
+addopts = '-v --cov'
+
+
+[tool.coverage.run]
+branch = true
+source = ['compress_asgi']
+
+[tool.coverage.report]
+precision = 2
+fail_under = 100
