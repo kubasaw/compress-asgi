@@ -1,112 +1,48 @@
-import gzip
-import io
-from typing import Collection
+from typing import TYPE_CHECKING, Collection
 
-import brotli
-from starlette.datastructures import Headers, MutableHeaders
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from .compressors import BaseCompressor, CompressorPreconfiguration
+from .constants import DEFAULT_MIMES_INCLUDED, DEFAULT_MINIMUM_SIZE
 
+if TYPE_CHECKING:
+    from asgiref.typing import (
+        ASGI3Application,
+        ASGIReceiveCallable,
+        ASGISendCallable,
+        HTTPDisconnectEvent,
+        HTTPResponseBodyEvent,
+        HTTPResponseStartEvent,
+        HTTPServerPushEvent,
+        Scope,
+    )
 
-class Compressor:
-    encodingName: str = None
-
-    def compress(self, data: bytes, finish: bool = False) -> bytes:
-        return data
-
-
-class BrotliCompressor(Compressor):
-    encodingName: str = "br"
-
-    def __init__(self) -> None:
-        self.compressor = brotli.Compressor()
-
-    def compress(self, data: bytes, finish: bool = False) -> bytes:
-        return self.compressor.process(data) + (
-            self.compressor.finish() if finish else b""
-        )
-
-
-class GzipCompressor(Compressor):
-    encodingName: str = "gzip"
-
-    def __init__(self) -> None:
-        self.buffer = io.BytesIO()
-        self.file = gzip.GzipFile(mode="wb", fileobj=self.buffer)
-
-    def compress(self, data: bytes, finish: bool = False) -> bytes:
-        self.file.write(data)
-        if finish:
-            self.file.close()
-
-        compressedData = self.buffer.getvalue()
-        self.buffer.truncate(0)
-
-        return compressedData
-
-
-class CompressorFactory:
-    def __init__(
-        self,
-        minimum_size: int,
-        compressible_mimes: Collection[str],
-    ) -> None:
-        self.minimum_size = minimum_size
-        self.compressible_mimes = compressible_mimes
-
-    def installCompressor(
-        self, request_headers: Headers, response_headers: MutableHeaders
-    ) -> Compressor:
-        compressor = BrotliCompressor()
-
-        response_headers["content-encoding"] = compressor.encodingName
-        return compressor
+    ASGIHTTPSendEvent = (
+        HTTPResponseStartEvent
+        | HTTPResponseBodyEvent
+        | HTTPServerPushEvent
+        | HTTPDisconnectEvent
+    )
 
 
 class CompressionMiddleware:
     def __init__(
         self,
-        app: ASGIApp,
-        minimum_size: int = 500,
-        include_mediatype: Collection[str] = frozenset(
-            (
-                "text/html",
-                "text/css",
-                "text/plain",
-                "text/xml",
-                "text/x-component",
-                "text/javascript",
-                "application/x-javascript",
-                "application/javascript",
-                "application/json",
-                "application/manifest+json",
-                "application/vnd.api+json",
-                "application/xml",
-                "application/xhtml+xml",
-                "application/rss+xml",
-                "application/atom+xml",
-                "application/vnd.ms-fontobject",
-                "application/x-font-ttf",
-                "application/x-font-opentype",
-                "application/x-font-truetype",
-                "image/svg+xml",
-                "image/x-icon",
-                "image/vnd.microsoft.icon",
-                "font/ttf",
-                "font/eot",
-                "font/otf",
-                "font/opentype",
-            )
-        ),
+        app: "ASGI3Application",
+        minimum_size: int = DEFAULT_MINIMUM_SIZE,
+        include_mediatype: Collection[str] = DEFAULT_MIMES_INCLUDED,
     ) -> None:
         self.app = app
-        self.compressorFactory = CompressorFactory(minimum_size, include_mediatype)
+        self.minimum_size = minimum_size
+        self.include_mediatype = frozenset(include_mediatype)
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http":
-            request_headers = Headers(scope=scope)
-            responder = CompressionResponder(
-                self.app, request_headers, self.compressorFactory
-            )
+    async def __call__(
+        self, scope: "Scope", receive: "ASGIReceiveCallable", send: "ASGISendCallable"
+    ) -> None:
+
+        compressor_preconfiguration = CompressorPreconfiguration(
+            self.minimum_size, self.include_mediatype, scope
+        )
+        if compressor_preconfiguration.non_identity:
+            responder = CompressionResponder(self.app, compressor_preconfiguration)
             await responder(scope, receive, send)
         else:
             await self.app(scope, receive, send)
@@ -115,48 +51,51 @@ class CompressionMiddleware:
 class CompressionResponder:
     def __init__(
         self,
-        app: ASGIApp,
-        request_headers: Headers,
-        compressor_factory: CompressorFactory,
+        app: "ASGI3Application",
+        compressor_preconfiguration: CompressorPreconfiguration,
     ) -> None:
 
         self.app = app
-        self.request_headers = request_headers
-        self.compressor_factory = compressor_factory
-        self.compressor: Compressor = None
+        self.compressor_preconfig = compressor_preconfiguration
 
-        self.initial_message: Message = {}
-        self.send: Send = unattached_send
+        self.compressor: BaseCompressor = None
+        self.initial_send_event: HTTPResponseStartEvent = None
+        self.send: ASGISendCallable = unattached_send
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def __call__(
+        self, scope: "Scope", receive: "ASGIReceiveCallable", send: "ASGISendCallable"
+    ) -> None:
         self.send = send
         await self.app(scope, receive, self.send_with_compression)
 
-    async def send_with_compression(self, message: Message) -> None:
+    async def send_with_compression(self, send_event: "ASGIHTTPSendEvent") -> None:
 
-        if message["type"] == "http.response.start":
-            # Don't send the initial message until we've determined how to
-            # modify the outgoing headers correctly.
-            self.initial_message = message
+        if send_event["type"] == "http.response.start":
+            self.initial_send_event = send_event
+        else:
+            if send_event["type"] == "http.response.body":
+                response_started = bool(self.compressor)
+                more_body = send_event.get("more_body", False)
 
-        elif message["type"] == "http.response.body" and not self.compressor:
-            response_headers = MutableHeaders(raw=self.initial_message["headers"])
-            self.compressor = self.compressor_factory.installCompressor(
-                self.request_headers, response_headers
-            )
+                if not response_started:
+                    self.compressor = self.compressor_preconfig.get_compressor(
+                        self.initial_send_event["headers"],
+                        len(send_event["body"]),
+                        more_body,
+                    )
 
-            more_body = message.get("more_body", False)
-            message["body"] = self.compressor.compress(message["body"], not more_body)
+                send_event["body"] = self.compressor.compress(
+                    send_event["body"], not more_body
+                )
 
-            await self.send(self.initial_message)
-            await self.send(message)
+                if not response_started:
+                    self.compressor.update_response_headers(
+                        self.initial_send_event["headers"]
+                    )
+                    await self.send(self.initial_send_event)
 
-        elif message["type"] == "http.response.body":
-            # Remaining body in streaming compressed response.
-            more_body = message.get("more_body", False)
-            message["body"] = self.compressor.compress(message["body"], not more_body)
-            await self.send(message)
+            await self.send(send_event)
 
 
-async def unattached_send(message: Message) -> None:
+async def unattached_send(send_event: "ASGIHTTPSendEvent"):
     raise RuntimeError("send awaitable not set")  # pragma: no cover

@@ -14,7 +14,6 @@ max-complexity = 10
 testpaths = ['tests']
 addopts = '-v --cov'
 
-
 [tool.coverage.run]
 branch = true
 source = ['compress_asgi']
@@ -22,3 +21,4 @@ source = ['compress_asgi']
 [tool.coverage.report]
 precision = 2
 fail_under = 100
+exclude_lines = ['if TYPE_CHECKING:', 'pragma: no cover']
