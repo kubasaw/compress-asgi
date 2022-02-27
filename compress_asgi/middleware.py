@@ -1,7 +1,8 @@
 from typing import TYPE_CHECKING, Collection
 
-from .compressors import BaseCompressor, CompressorPreconfiguration
+from .compressors import Compressor
 from .constants import DEFAULT_MIMES_INCLUDED, DEFAULT_MINIMUM_SIZE
+from .headers_tools import Headers, MutableHeaders
 
 if TYPE_CHECKING:
     from asgiref.typing import (
@@ -38,11 +39,11 @@ class CompressionMiddleware:
         self, scope: "Scope", receive: "ASGIReceiveCallable", send: "ASGISendCallable"
     ) -> None:
 
-        compressor_preconfiguration = CompressorPreconfiguration(
-            self.minimum_size, self.include_mediatype, scope
+        compressor = Compressor(
+            self.minimum_size, self.include_mediatype, Headers(scope=scope)
         )
-        if compressor_preconfiguration.non_identity:
-            responder = CompressionResponder(self.app, compressor_preconfiguration)
+        if compressor.accepted:
+            responder = CompressionResponder(self.app, compressor)
             await responder(scope, receive, send)
         else:
             await self.app(scope, receive, send)
@@ -52,13 +53,12 @@ class CompressionResponder:
     def __init__(
         self,
         app: "ASGI3Application",
-        compressor_preconfiguration: CompressorPreconfiguration,
+        compressor: Compressor,
     ) -> None:
 
         self.app = app
-        self.compressor_preconfig = compressor_preconfiguration
+        self.compressor = compressor
 
-        self.compressor: BaseCompressor = None
         self.initial_send_event: HTTPResponseStartEvent = None
         self.send: ASGISendCallable = unattached_send
 
@@ -72,27 +72,18 @@ class CompressionResponder:
 
         if send_event["type"] == "http.response.start":
             self.initial_send_event = send_event
+            self.compressor.response_init(MutableHeaders(scope=send_event))
         else:
             if send_event["type"] == "http.response.body":
-                response_started = bool(self.compressor)
-                more_body = send_event.get("more_body", False)
 
-                if not response_started:
-                    self.compressor = self.compressor_preconfig.get_compressor(
-                        self.initial_send_event["headers"],
-                        len(send_event["body"]),
-                        more_body,
-                    )
-
-                send_event["body"] = self.compressor.compress(
-                    send_event["body"], not more_body
+                send_event["body"] = self.compressor.engine.compress(
+                    send_event["body"], not send_event.get("more_body", False)
                 )
 
-                if not response_started:
-                    self.compressor.update_response_headers(
-                        self.initial_send_event["headers"]
-                    )
+                if self.initial_send_event:
+                    self.compressor.modify_response_headers()
                     await self.send(self.initial_send_event)
+                    self.initial_send_event = None
 
             await self.send(send_event)
 

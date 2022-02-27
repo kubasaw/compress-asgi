@@ -1,41 +1,27 @@
 import gzip
 import io
-from typing import TYPE_CHECKING, Collection, Iterable, Tuple, Type
+from typing import Collection
 
 import brotli
 from .headers_tools import Headers, MutableHeaders
 
-if TYPE_CHECKING:
-    from asgiref.typing import Scope
 
+class BaseEngine:
+    encoding_name: str = ""
 
-class BaseCompressor:
-    encoding_name: bytes = b""
-
-    def __init__(self, chunked_response: bool, response_mimetype: bytes) -> None:
+    def __init__(self) -> None:
         self.content_length = 0
-        self.chunked_response = chunked_response
-
-    def update_response_headers(self, response_headers: Iterable[Tuple[bytes, bytes]]):
-        headers = MutableHeaders(response_headers)
-        if self.encoding_name:
-            headers[b"content-encoding"] = self.encoding_name
-            headers.add_vary_header(b"accept-encoding")
-            if self.chunked_response:
-                del headers[b"content-length"]
-            else:
-                headers[b"content-length"] = b"%d" % self.content_length
 
     def compress(self, data: bytes, last_chunk: bool = False) -> bytes:
         self.content_length += len(data)
         return data
 
 
-class BrotliCompressor(BaseCompressor):
-    encoding_name: bytes = b"br"
+class BrotliEngine(BaseEngine):
+    encoding_name: str = "br"
 
-    def __init__(self, chunked_response: bool, response_mimetype: bytes) -> None:
-        super().__init__(chunked_response, response_mimetype)
+    def __init__(self, response_mimetype: str) -> None:
+        super().__init__()
         self.compressor = brotli.Compressor()
 
     def compress(self, data: bytes, last_chunk: bool = False) -> bytes:
@@ -47,11 +33,11 @@ class BrotliCompressor(BaseCompressor):
         return compressed_data
 
 
-class GzipCompressor(BaseCompressor):
-    encoding_name: bytes = b"gzip"
+class GzipEngine(BaseEngine):
+    encoding_name: str = "gzip"
 
-    def __init__(self, chunked_response: bool, response_mimetype: bytes) -> None:
-        super().__init__(chunked_response, response_mimetype)
+    def __init__(self, response_mimetype: str) -> None:
+        super().__init__()
         self.buffer = io.BytesIO()
         self.file = gzip.GzipFile(mode="wb", fileobj=self.buffer)
 
@@ -68,72 +54,51 @@ class GzipCompressor(BaseCompressor):
         return compressed_data
 
 
-class CompressorPreconfiguration:
-    @staticmethod
-    def __accepted_encodings(headers: Headers):
-        ACCEPT_ENCODING_HEADER = b"accept-encoding"
-
-        if ACCEPT_ENCODING_HEADER in headers:
-            user_accepted_encodings = {
-                encoding.partition(b";")[0].strip()
-                for encoding in headers[ACCEPT_ENCODING_HEADER].split(b",")
-            }
-
-            return user_accepted_encodings
-
-        return set()
-
-    @staticmethod
-    def __choose_compressor(
-        headers: Headers,
-        compressors: Collection[Type[BaseCompressor]],
-    ) -> Type[BaseCompressor]:
-        accepted_encodings = CompressorPreconfiguration.__accepted_encodings(headers)
-
-        if accepted_encodings:
-            for compressor_cls in compressors:
-                if compressor_cls.encoding_name in accepted_encodings:
-                    return compressor_cls
-
-        return BaseCompressor
-
+class Compressor:
     def __init__(
         self,
         minimum_length: int,
         include_mediatype: Collection[str],
-        scope: "Scope",
+        request_headers: Headers,
     ) -> None:
-        headers = Headers(scope["headers"])
-        compressor_cls = CompressorPreconfiguration.__choose_compressor(
-            headers, (BrotliCompressor, GzipCompressor)
-        )
+
+        self.request_engine_cls = None
+
+        request_accepted_encodings = request_headers.getacceptedencodings()
+        for compressor in (BrotliEngine, GzipEngine):
+            if compressor.encoding_name in request_accepted_encodings:
+                self.request_engine_cls = compressor
+                break
 
         self.minimum_length = minimum_length
         self.include_mediatype = include_mediatype
-        self.compressor_cls = compressor_cls
-
-        print(self.compressor_cls)
 
     @property
-    def non_identity(self):
-        return self.compressor_cls != BaseCompressor
+    def accepted(self):
+        return bool(self.request_engine_cls)
 
-    def get_compressor(
-        self,
-        response_headers: Iterable[Tuple[bytes, bytes]],
-        response_length: int,
-        chunked_response: bool,
-    ):
+    def response_init(self, response_headers: MutableHeaders):
+        self.response_headers = response_headers
+
+        content_length = int(
+            response_headers.get("content-length", self.minimum_length)
+        )
         response_mimetype = (
-            Headers(response_headers)
-            .get(b"content-type", b"")
-            .partition(b";")[0]
-            .strip()
+            response_headers.get("content-type", "").partition(";")[0].strip()
         )
 
         if response_mimetype not in self.include_mediatype or (
-            response_length < self.minimum_length and not chunked_response
+            content_length < self.minimum_length
         ):
-            self.compressor_cls = BaseCompressor
+            self.engine = BaseEngine()
+        else:
+            self.engine = self.request_engine_cls(response_mimetype)
 
-        return self.compressor_cls(chunked_response, response_mimetype)
+    def modify_response_headers(self):
+        if self.engine.encoding_name:
+            self.response_headers["content-encoding"] = self.engine.encoding_name
+            self.response_headers.add_vary_header("accept-encoding")
+            if "content-length" in self.response_headers:
+                self.response_headers["content-length"] = str(
+                    self.engine.content_length
+                )

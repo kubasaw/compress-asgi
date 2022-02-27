@@ -1,4 +1,3 @@
-from pickle import bytes_types
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse, StreamingResponse
 from starlette.testclient import TestClient
