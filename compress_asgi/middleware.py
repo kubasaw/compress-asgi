@@ -1,10 +1,10 @@
-from typing import TYPE_CHECKING, Collection
+from typing import Collection, TypeVar, Union
 
 from .compressors import Compressor
 from .constants import DEFAULT_MIMES_INCLUDED, DEFAULT_MINIMUM_SIZE
 from .headers_tools import Headers, MutableHeaders
 
-if TYPE_CHECKING:
+try:
     from asgiref.typing import (
         ASGI3Application,
         ASGIReceiveCallable,
@@ -16,18 +16,28 @@ if TYPE_CHECKING:
         Scope,
     )
 
-    ASGIHTTPSendEvent = (
-        HTTPResponseStartEvent
-        | HTTPResponseBodyEvent
-        | HTTPServerPushEvent
-        | HTTPDisconnectEvent
-    )
+except ModuleNotFoundError:
+    ASGI3Application = TypeVar("ASGI3Application")
+    ASGIReceiveCallable = TypeVar("ASGIReceiveCallable")
+    ASGISendCallable = TypeVar("ASGISendCallable")
+    HTTPDisconnectEvent = TypeVar("HTTPDisconnectEvent")
+    HTTPResponseBodyEvent = TypeVar("HTTPResponseBodyEvent")
+    HTTPResponseStartEvent = TypeVar("HTTPResponseStartEvent")
+    HTTPServerPushEvent = TypeVar("HTTPServerPushEvent")
+    Scope = TypeVar("Scope")
+
+ASGIHTTPSendEvent = Union[
+    HTTPResponseStartEvent,
+    HTTPResponseBodyEvent,
+    HTTPServerPushEvent,
+    HTTPDisconnectEvent,
+]
 
 
 class CompressionMiddleware:
     def __init__(
         self,
-        app: "ASGI3Application",
+        app: ASGI3Application,
         minimum_size: int = DEFAULT_MINIMUM_SIZE,
         include_mediatype: Collection[str] = DEFAULT_MIMES_INCLUDED,
     ) -> None:
@@ -36,7 +46,7 @@ class CompressionMiddleware:
         self.include_mediatype = frozenset(include_mediatype)
 
     async def __call__(
-        self, scope: "Scope", receive: "ASGIReceiveCallable", send: "ASGISendCallable"
+        self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable
     ) -> None:
 
         compressor = Compressor(
@@ -52,7 +62,7 @@ class CompressionMiddleware:
 class CompressionResponder:
     def __init__(
         self,
-        app: "ASGI3Application",
+        app: ASGI3Application,
         compressor: Compressor,
     ) -> None:
 
@@ -60,21 +70,21 @@ class CompressionResponder:
         self.compressor = compressor
 
         self.initial_send_event: HTTPResponseStartEvent = None
-        self.send: ASGISendCallable = unattached_send
+        self.send: ASGISendCallable = None
 
     async def __call__(
-        self, scope: "Scope", receive: "ASGIReceiveCallable", send: "ASGISendCallable"
+        self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable
     ) -> None:
         self.send = send
         await self.app(scope, receive, self.send_with_compression)
 
-    async def send_with_compression(self, send_event: "ASGIHTTPSendEvent") -> None:
+    async def send_with_compression(self, send_event: ASGIHTTPSendEvent) -> None:
 
         if send_event["type"] == "http.response.start":
             self.initial_send_event = send_event
             self.compressor.response_init(MutableHeaders(scope=send_event))
         else:
-            if send_event["type"] == "http.response.body":
+            if send_event["type"] == "http.response.body":  # pragma: no branch
 
                 send_event["body"] = self.compressor.engine.compress(
                     send_event["body"], not send_event.get("more_body", False)
@@ -86,7 +96,3 @@ class CompressionResponder:
                     self.initial_send_event = None
 
             await self.send(send_event)
-
-
-async def unattached_send(send_event: "ASGIHTTPSendEvent"):
-    raise RuntimeError("send awaitable not set")  # pragma: no cover

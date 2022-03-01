@@ -9,7 +9,7 @@ from .headers_tools import Headers, MutableHeaders
 class BaseEngine:
     encoding_name: str = ""
 
-    def __init__(self) -> None:
+    def __init__(self, response_mimetype: str) -> None:
         self.content_length = 0
 
     def compress(self, data: bytes, last_chunk: bool = False) -> bytes:
@@ -21,7 +21,7 @@ class BrotliEngine(BaseEngine):
     encoding_name: str = "br"
 
     def __init__(self, response_mimetype: str) -> None:
-        super().__init__()
+        super().__init__(response_mimetype)
         self.compressor = brotli.Compressor()
 
     def compress(self, data: bytes, last_chunk: bool = False) -> bytes:
@@ -37,7 +37,7 @@ class GzipEngine(BaseEngine):
     encoding_name: str = "gzip"
 
     def __init__(self, response_mimetype: str) -> None:
-        super().__init__()
+        super().__init__(response_mimetype)
         self.buffer = io.BytesIO()
         self.file = gzip.GzipFile(mode="wb", fileobj=self.buffer)
 
@@ -87,10 +87,12 @@ class Compressor:
             response_headers.get("content-type", "").partition(";")[0].strip()
         )
 
-        if response_mimetype not in self.include_mediatype or (
-            content_length < self.minimum_length
+        if (
+            (self.request_engine_cls is None)
+            or (response_mimetype not in self.include_mediatype)
+            or (content_length < self.minimum_length)
         ):
-            self.engine = BaseEngine()
+            self.engine = BaseEngine(response_mimetype)
         else:
             self.engine = self.request_engine_cls(response_mimetype)
 
