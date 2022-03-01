@@ -1,7 +1,6 @@
-import time
 import pytest
 from starlette.applications import Starlette
-from starlette.responses import PlainTextResponse, StreamingResponse
+from starlette.responses import PlainTextResponse, Response, StreamingResponse
 from starlette.testclient import TestClient
 
 
@@ -18,7 +17,9 @@ def test_encoded_response(encoding: str):
     app.add_middleware(CompressionMiddleware)
     app.add_route(TEST_PATH, lambda request: PlainTextResponse(TEST_RESPONSE))
 
-    response = TestClient(app).get(TEST_PATH, headers={"accept-encoding": encoding})
+    response = TestClient(app).get(
+        TEST_PATH, headers={"accept-encoding": encoding + ";q=1"}
+    )
 
     assert response.status_code == 200
     assert response.text == TEST_RESPONSE
@@ -32,7 +33,7 @@ def test_unencoded_response(encoding: str | None):
 
     from compress_asgi.middleware import CompressionMiddleware
 
-    TEST_RESPONSE = "1" * 2000
+    TEST_RESPONSE = "1" * 1000
     TEST_PATH = "/"
 
     app = Starlette()
@@ -100,7 +101,16 @@ def test_short_response():
     assert int(response.headers["content-length"]) == len(TEST_RESPONSE)
 
 
-def test_excluded_mime():
+@pytest.mark.parametrize(
+    ("mime", "encoding"),
+    (
+        ("image/svg+xml", "br"),
+        ("font/ttf", "br"),
+        ("image/x-icon", "br"),
+        ("application/octet-stream", None),
+    ),
+)
+def test_multiple_mime(mime, encoding):
 
     from compress_asgi.middleware import CompressionMiddleware
 
@@ -109,15 +119,14 @@ def test_excluded_mime():
 
     app = Starlette()
 
-    app.add_middleware(CompressionMiddleware, include_mediatype={"only_this_mime"})
-    app.add_route(TEST_PATH, lambda request: PlainTextResponse(TEST_RESPONSE))
+    app.add_middleware(CompressionMiddleware)
+    app.add_route(TEST_PATH, lambda request: Response(TEST_RESPONSE, media_type=mime))
 
     response = TestClient(app).get(TEST_PATH)
 
     assert response.status_code == 200
     assert response.text == TEST_RESPONSE
-    assert "content-encoding" not in response.headers
-    assert int(response.headers["content-length"]) == len(TEST_RESPONSE)
+    assert response.headers.get("content-encoding") == encoding
 
 
 def test_multiple_vary_headers():
@@ -169,7 +178,8 @@ def test_multiple_same_response_headers():
     app.add_route(
         TEST_PATH,
         lambda request: PlainTextResponse(
-            TEST_RESPONSE, headers=MultiDictLike("content-encoding", 'gzip', 'br', None, 'gzip')
+            TEST_RESPONSE,
+            headers=MultiDictLike("content-encoding", "gzip", "br", None, "gzip"),
         ),
     )
 

@@ -3,6 +3,7 @@ import io
 from typing import Collection
 
 import brotli
+
 from .headers_tools import Headers, MutableHeaders
 
 
@@ -22,7 +23,18 @@ class BrotliEngine(BaseEngine):
 
     def __init__(self, response_mimetype: str) -> None:
         super().__init__(response_mimetype)
-        self.compressor = brotli.Compressor()
+
+        if any(
+            predicate in response_mimetype
+            for predicate in ("text", "javascript", "json", "xml")
+        ):
+            mode = brotli.MODE_TEXT
+        elif "font" in response_mimetype:
+            mode = brotli.MODE_FONT
+        else:
+            mode = brotli.MODE_GENERIC
+
+        self.compressor = brotli.Compressor(mode=mode)
 
     def compress(self, data: bytes, last_chunk: bool = False) -> bytes:
         compressed_data = self.compressor.process(data) + (
