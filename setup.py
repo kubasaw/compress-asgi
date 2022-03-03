@@ -15,7 +15,8 @@ setuptools.setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    packages=setuptools.find_packages(exclude="tests*"),
+    packages=["compress_asgi"],
+    package_dir={"compress_asgi": "compress_asgi"},
     python_requires=">=3.7",
     extras_require={
         "brotli": ["brotli>=1.0.9,<2"],
