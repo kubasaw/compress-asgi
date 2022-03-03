@@ -2,7 +2,6 @@ from typing import Collection, TypeVar, Union
 
 from .compressors import Compressor
 from .constants import DEFAULT_MIMES_INCLUDED, DEFAULT_MINIMUM_SIZE
-from .headers_tools import Headers, MutableHeaders
 
 try:
     from asgiref.typing import (
@@ -49,10 +48,9 @@ class CompressionMiddleware:
         self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable
     ) -> None:
 
-        compressor = Compressor(
-            self.minimum_size, self.include_mediatype, Headers(scope=scope)
-        )
-        if compressor.accepted:
+        compressor = Compressor(self.minimum_size, self.include_mediatype, scope)
+
+        if compressor:
             responder = CompressionResponder(self.app, compressor)
             await responder(scope, receive, send)
         else:
@@ -81,8 +79,7 @@ class CompressionResponder:
     async def send_with_compression(self, send_event: ASGIHTTPSendEvent) -> None:
 
         if send_event["type"] == "http.response.start":
-            self.initial_send_event = send_event
-            self.compressor.response_init(MutableHeaders(scope=send_event))
+            self.initial_send_event = self.compressor.response_init(send_event)
         else:
             if send_event["type"] == "http.response.body":  # pragma: no branch
 

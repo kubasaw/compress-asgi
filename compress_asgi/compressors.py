@@ -1,9 +1,14 @@
 import gzip
 import io
 import zlib
-from typing import Collection
+from typing import Collection, TypeVar
 
 from .headers_tools import Headers, MutableHeaders
+
+try:
+    from asgiref.typing import Scope
+except ModuleNotFoundError:
+    Scope = TypeVar("Scope")
 
 try:
     import brotli
@@ -91,32 +96,33 @@ class Compressor:
         self,
         minimum_length: int,
         include_mediatype: Collection[str],
-        request_headers: Headers,
+        scope: Scope,
     ) -> None:
 
         self.request_engine_cls = None
-
-        request_accepted_encodings = request_headers.getacceptedencodings()
-        for compressor in BaseEncoder.__subclasses__():
-            if compressor.encoding_name in request_accepted_encodings:
-                self.request_engine_cls = compressor
-                break
-
         self.minimum_length = minimum_length
         self.include_mediatype = include_mediatype
 
-    @property
-    def accepted(self):
+        if scope["type"] == "http":
+            headers = Headers(scope=scope)
+
+            request_accepted_encodings = headers.getacceptedencodings()
+            for compressor in BaseEncoder.__subclasses__():
+                if compressor.encoding_name in request_accepted_encodings:
+                    self.request_engine_cls = compressor
+                    break
+
+    def __bool__(self):
         return bool(self.request_engine_cls)
 
-    def response_init(self, response_headers: MutableHeaders):
-        self.response_headers = response_headers
+    def response_init(self, scope: Scope):
+        self.response_headers = MutableHeaders(scope=scope)
 
         content_length = int(
-            response_headers.get("content-length", self.minimum_length)
+            self.response_headers.get("content-length", self.minimum_length)
         )
         response_mimetype = (
-            response_headers.get("content-type", "").partition(";")[0].strip()
+            self.response_headers.get("content-type", "").partition(";")[0].strip()
         )
 
         if (
@@ -127,6 +133,8 @@ class Compressor:
             self.engine = BaseEncoder(response_mimetype)
         else:
             self.engine = self.request_engine_cls(response_mimetype)
+
+        return scope
 
     def modify_response_headers(self):
         if self.engine.encoding_name:

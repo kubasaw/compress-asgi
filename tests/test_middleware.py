@@ -5,9 +5,11 @@ from starlette.testclient import TestClient
 
 
 @pytest.mark.parametrize("encoding", ("deflate", "gzip", "br"))
-def test_encoded_response(encoding: str):
+def test_encoded_response(encoding: str, hide_optional_dependencies):
+    from compress_asgi import CompressionMiddleware
 
-    from compress_asgi.middleware import CompressionMiddleware
+    if encoding == "br" and hide_optional_dependencies:
+        pytest.skip("brotli package unavailable")
 
     TEST_RESPONSE = "1" * 1000
     TEST_PATH = "/"
@@ -17,9 +19,8 @@ def test_encoded_response(encoding: str):
     app.add_middleware(CompressionMiddleware)
     app.add_route(TEST_PATH, lambda request: PlainTextResponse(TEST_RESPONSE))
 
-    response = TestClient(app).get(
-        TEST_PATH, headers={"accept-encoding": encoding + ";q=1"}
-    )
+    with TestClient(app) as client:
+        response = client.get(TEST_PATH, headers={"accept-encoding": encoding + ";q=1"})
 
     assert response.status_code == 200
     assert response.text == TEST_RESPONSE
@@ -30,8 +31,7 @@ def test_encoded_response(encoding: str):
 
 @pytest.mark.parametrize("encoding", (None, "unknown"))
 def test_unencoded_response(encoding: str | None):
-
-    from compress_asgi.middleware import CompressionMiddleware
+    from compress_asgi import CompressionMiddleware
 
     TEST_RESPONSE = "1" * 1000
     TEST_PATH = "/"
@@ -41,7 +41,8 @@ def test_unencoded_response(encoding: str | None):
     app.add_middleware(CompressionMiddleware)
     app.add_route(TEST_PATH, lambda request: PlainTextResponse(TEST_RESPONSE))
 
-    response = TestClient(app).get(TEST_PATH, headers={"accept-encoding": encoding})
+    with TestClient(app) as client:
+        response = client.get(TEST_PATH, headers={"accept-encoding": encoding})
 
     assert response.status_code == 200
     assert response.text == TEST_RESPONSE
@@ -50,9 +51,11 @@ def test_unencoded_response(encoding: str | None):
 
 
 @pytest.mark.parametrize("encoding", ("deflate", "gzip", "br"))
-def test_streaming_response(encoding: str):
+def test_streaming_response(encoding: str, hide_optional_dependencies):
+    from compress_asgi import CompressionMiddleware
 
-    from compress_asgi.middleware import CompressionMiddleware
+    if encoding == "br" and hide_optional_dependencies:
+        pytest.skip("brotli package unavailable")
 
     TEST_PATH = "/"
     TEST_RESPONSE_BYTE = "1"
@@ -72,7 +75,8 @@ def test_streaming_response(encoding: str):
         lambda request: StreamingResponse(responseGenerator(), media_type="text/html"),
     )
 
-    response = TestClient(app).get(TEST_PATH, headers={"accept-encoding": encoding})
+    with TestClient(app) as client:
+        response = client.get(TEST_PATH, headers={"accept-encoding": encoding})
 
     assert response.status_code == 200
     assert response.text == TEST_RESPONSE_BYTE * TEST_RESPONSE_LENGTH
@@ -82,8 +86,7 @@ def test_streaming_response(encoding: str):
 
 
 def test_short_response():
-
-    from compress_asgi.middleware import CompressionMiddleware
+    from compress_asgi import CompressionMiddleware
 
     TEST_RESPONSE = "1" * 100
     TEST_PATH = "/"
@@ -93,7 +96,8 @@ def test_short_response():
     app.add_middleware(CompressionMiddleware)
     app.add_route(TEST_PATH, lambda request: PlainTextResponse(TEST_RESPONSE))
 
-    response = TestClient(app).get(TEST_PATH)
+    with TestClient(app) as client:
+        response = client.get(TEST_PATH)
 
     assert response.status_code == 200
     assert response.text == TEST_RESPONSE
@@ -110,9 +114,11 @@ def test_short_response():
         ("application/octet-stream", None),
     ),
 )
-def test_multiple_mime(mime, encoding):
+def test_multiple_mime(mime, encoding, hide_optional_dependencies):
+    from compress_asgi import CompressionMiddleware
 
-    from compress_asgi.middleware import CompressionMiddleware
+    if encoding == "br" and hide_optional_dependencies:
+        encoding = "gzip"
 
     TEST_RESPONSE = "1" * 2000
     TEST_PATH = "/"
@@ -122,7 +128,8 @@ def test_multiple_mime(mime, encoding):
     app.add_middleware(CompressionMiddleware)
     app.add_route(TEST_PATH, lambda request: Response(TEST_RESPONSE, media_type=mime))
 
-    response = TestClient(app).get(TEST_PATH)
+    with TestClient(app) as client:
+        response = client.get(TEST_PATH)
 
     assert response.status_code == 200
     assert response.text == TEST_RESPONSE
@@ -131,7 +138,7 @@ def test_multiple_mime(mime, encoding):
 
 def test_multiple_vary_headers():
 
-    from compress_asgi.middleware import CompressionMiddleware
+    from compress_asgi import CompressionMiddleware
 
     TEST_RESPONSE = "1" * 2000
     TEST_PATH = "/"
@@ -146,7 +153,8 @@ def test_multiple_vary_headers():
         ),
     )
 
-    response = TestClient(app).get(TEST_PATH)
+    with TestClient(app) as client:
+        response = client.get(TEST_PATH)
 
     assert response.status_code == 200
     assert response.text == TEST_RESPONSE
@@ -158,7 +166,7 @@ def test_multiple_vary_headers():
 
 def test_multiple_same_response_headers():
 
-    from compress_asgi.middleware import CompressionMiddleware
+    from compress_asgi import CompressionMiddleware
 
     class MultiDictLike:
         def __init__(self, header: str, *values) -> None:
@@ -183,7 +191,8 @@ def test_multiple_same_response_headers():
         ),
     )
 
-    response = TestClient(app).get(TEST_PATH)
+    with TestClient(app) as client:
+        response = client.get(TEST_PATH)
 
     assert response.status_code == 200
     assert response.text == TEST_RESPONSE
