@@ -4,7 +4,7 @@ from starlette.responses import PlainTextResponse, Response, StreamingResponse
 from starlette.testclient import TestClient
 
 
-@pytest.mark.parametrize("encoding", ("gzip", "br"))
+@pytest.mark.parametrize("encoding", ("deflate", "gzip", "br"))
 def test_encoded_response(encoding: str):
 
     from compress_asgi.middleware import CompressionMiddleware
@@ -49,7 +49,7 @@ def test_unencoded_response(encoding: str | None):
     assert int(response.headers["content-length"]) == len(TEST_RESPONSE)
 
 
-@pytest.mark.parametrize("encoding", ("gzip", "br"))
+@pytest.mark.parametrize("encoding", ("deflate", "gzip", "br"))
 def test_streaming_response(encoding: str):
 
     from compress_asgi.middleware import CompressionMiddleware

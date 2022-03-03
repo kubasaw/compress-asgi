@@ -1,13 +1,17 @@
 import gzip
 import io
+import zlib
 from typing import Collection
-
-import brotli
 
 from .headers_tools import Headers, MutableHeaders
 
+try:
+    import brotli
+except ModuleNotFoundError:
+    brotli = None
 
-class BaseEngine:
+
+class BaseEncoder:
     encoding_name: str = ""
 
     def __init__(self, response_mimetype: str) -> None:
@@ -18,34 +22,35 @@ class BaseEngine:
         return data
 
 
-class BrotliEngine(BaseEngine):
-    encoding_name: str = "br"
+if brotli:
 
-    def __init__(self, response_mimetype: str) -> None:
-        super().__init__(response_mimetype)
+    class BrotliEncoder(BaseEncoder):
+        encoding_name: str = "br"
 
-        if any(
-            predicate in response_mimetype
-            for predicate in ("text", "javascript", "json", "xml")
-        ):
-            mode = brotli.MODE_TEXT
-        elif "font" in response_mimetype:
-            mode = brotli.MODE_FONT
-        else:
-            mode = brotli.MODE_GENERIC
+        def __init__(self, response_mimetype: str) -> None:
+            super().__init__(response_mimetype)
 
-        self.compressor = brotli.Compressor(mode=mode)
+            if any(
+                predicate in response_mimetype
+                for predicate in ("text", "javascript", "json", "xml")
+            ):
+                mode = brotli.MODE_TEXT
+            elif "font" in response_mimetype:
+                mode = brotli.MODE_FONT
+            else:
+                mode = brotli.MODE_GENERIC
 
-    def compress(self, data: bytes, last_chunk: bool = False) -> bytes:
-        compressed_data = self.compressor.process(data) + (
-            self.compressor.finish() if last_chunk else b""
-        )
-        self.content_length += len(compressed_data)
+            self.compressor = brotli.Compressor(mode=mode)
 
-        return compressed_data
+        def compress(self, data: bytes, last_chunk: bool = False) -> bytes:
+            compressed_data = self.compressor.process(data) + (
+                self.compressor.finish() if last_chunk else b""
+            )
+
+            return super().compress(compressed_data, last_chunk)
 
 
-class GzipEngine(BaseEngine):
+class GzipEncoder(BaseEncoder):
     encoding_name: str = "gzip"
 
     def __init__(self, response_mimetype: str) -> None:
@@ -61,9 +66,24 @@ class GzipEngine(BaseEngine):
         compressed_data = self.buffer.getvalue()
         self.buffer.seek(0)
         self.buffer.truncate()
-        self.content_length += len(compressed_data)
 
-        return compressed_data
+        return super().compress(compressed_data, last_chunk)
+
+
+class DeflateEncoder(BaseEncoder):
+    encoding_name: str = "deflate"
+
+    def __init__(self, response_mimetype: str) -> None:
+        super().__init__(response_mimetype)
+        self.compressobj = zlib.compressobj(method=zlib.DEFLATED)
+
+    def compress(self, data: bytes, last_chunk: bool = False) -> bytes:
+
+        compressed_data = self.compressobj.compress(data)
+        if last_chunk:
+            compressed_data += self.compressobj.flush(zlib.Z_FINISH)
+
+        return super().compress(compressed_data, last_chunk)
 
 
 class Compressor:
@@ -77,7 +97,7 @@ class Compressor:
         self.request_engine_cls = None
 
         request_accepted_encodings = request_headers.getacceptedencodings()
-        for compressor in (BrotliEngine, GzipEngine):
+        for compressor in BaseEncoder.__subclasses__():
             if compressor.encoding_name in request_accepted_encodings:
                 self.request_engine_cls = compressor
                 break
@@ -104,7 +124,7 @@ class Compressor:
             or (response_mimetype not in self.include_mediatype)
             or (content_length < self.minimum_length)
         ):
-            self.engine = BaseEngine(response_mimetype)
+            self.engine = BaseEncoder(response_mimetype)
         else:
             self.engine = self.request_engine_cls(response_mimetype)
 

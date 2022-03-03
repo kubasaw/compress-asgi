@@ -13,7 +13,7 @@ def hide_dev_dependencies(request, monkeypatch):
         import_orig = builtins.__import__
 
         def mocked_import(name, *args, **kwargs):
-            if any(package in name for package in ("starlette", "asgiref")):
+            if any(package in name for package in ("starlette", "asgiref", "brotli")):
                 raise ModuleNotFoundError()
             return import_orig(name, *args, **kwargs)
 

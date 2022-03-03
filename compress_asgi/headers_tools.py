@@ -1,8 +1,13 @@
 import typing
 
-try:  # noqa: C901
+try:
     from starlette.datastructures import Headers as StarletteHeaders
+    from starlette.datastructures import MutableHeaders
 except ModuleNotFoundError:
+    StarletteHeaders = None
+    MutableHeaders = None
+
+if not StarletteHeaders:
 
     class StarletteHeaders:
         def __init__(
@@ -59,11 +64,9 @@ class Headers(StarletteHeaders):
         return user_accepted_encodings
 
 
-try:
-    from starlette.datastructures import MutableHeaders as StarletteMutableHeaders
-except ModuleNotFoundError:
+if not MutableHeaders:
 
-    class StarletteMutableHeaders(StarletteHeaders):
+    class MutableHeaders(Headers):
         def __setitem__(self, key: str, value: str) -> None:
             """
             Set the header `key` to `value`, removing any duplicate entries.
@@ -91,7 +94,3 @@ except ModuleNotFoundError:
             if existing is not None:
                 vary = ", ".join([existing, vary])
             self["vary"] = vary
-
-
-class MutableHeaders(StarletteMutableHeaders):
-    pass
