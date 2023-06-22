@@ -12,9 +12,14 @@ if not StarletteHeaders:
     class StarletteHeaders:
         def __init__(
             self,
-            scope: typing.Optional[typing.Mapping[str, typing.Any]],
+            raw: typing.Optional[typing.List[typing.Tuple[bytes, bytes]]] = None,
+            scope: typing.Optional[typing.MutableMapping[str, typing.Any]] = None,
         ) -> None:
-            self._list = scope["headers"]
+            assert raw is None or scope is None, 'Cannot set both "raw" and "scope".'
+            if raw:
+                self._list = raw
+            else:
+                self._list = scope["headers"]
 
         def get(self, key: str, default: typing.Any = None) -> typing.Any:
             try:
@@ -28,13 +33,6 @@ if not StarletteHeaders:
                 if header_key == get_header_key:
                     return header_value.decode("latin-1")
             raise KeyError(key)
-
-        def __contains__(self, key: typing.Any) -> bool:
-            get_header_key = key.lower().encode("latin-1")
-            for header_key, header_value in self._list:
-                if header_key == get_header_key:
-                    return True
-            return False
 
 
 class Headers(StarletteHeaders):

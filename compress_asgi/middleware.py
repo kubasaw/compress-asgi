@@ -47,7 +47,6 @@ class CompressionMiddleware:
     async def __call__(
         self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable
     ) -> None:
-
         compressor = Compressor(self.minimum_size, self.include_mediatype, scope)
 
         if compressor:
@@ -63,7 +62,6 @@ class CompressionResponder:
         app: ASGI3Application,
         compressor: Compressor,
     ) -> None:
-
         self.app = app
         self.compressor = compressor
 
@@ -77,19 +75,19 @@ class CompressionResponder:
         await self.app(scope, receive, self.send_with_compression)
 
     async def send_with_compression(self, send_event: ASGIHTTPSendEvent) -> None:
-
         if send_event["type"] == "http.response.start":
-            self.initial_send_event = self.compressor.response_init(send_event)
+            self.initial_send_event = send_event
         else:
             if send_event["type"] == "http.response.body":  # pragma: no branch
-
-                send_event["body"] = self.compressor.engine.compress(
-                    send_event["body"], not send_event.get("more_body", False)
-                )
-
                 if self.initial_send_event:
-                    self.compressor.modify_response_headers()
+                    self.compressor.response_init(
+                        self.initial_send_event, send_event
+                    )
                     await self.send(self.initial_send_event)
                     self.initial_send_event = None
-
+                else:
+                    send_event["body"] = self.compressor.engine.compress(
+                        send_event["body"], not send_event.get("more_body", False)
+                    )
+            print(send_event)
             await self.send(send_event)
