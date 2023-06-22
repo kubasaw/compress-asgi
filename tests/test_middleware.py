@@ -42,7 +42,12 @@ def test_unencoded_response(encoding: str | None):
     app.add_route(TEST_PATH, lambda request: PlainTextResponse(TEST_RESPONSE))
 
     with TestClient(app) as client:
-        response = client.get(TEST_PATH, headers={"accept-encoding": encoding})
+        req = client.build_request("GET", TEST_PATH)
+        if encoding:
+            req.headers["accept-encoding"] = encoding
+        else:
+            del req.headers["accept-encoding"]
+        response = client.send(req)
 
     assert response.status_code == 200
     assert response.text == TEST_RESPONSE
@@ -137,7 +142,6 @@ def test_multiple_mime(mime, encoding, hide_optional_dependencies):
 
 
 def test_multiple_vary_headers():
-
     from compress_asgi import CompressionMiddleware
 
     TEST_RESPONSE = "1" * 2000
@@ -165,7 +169,6 @@ def test_multiple_vary_headers():
 
 
 def test_multiple_same_response_headers():
-
     from compress_asgi import CompressionMiddleware
 
     class MultiDictLike:

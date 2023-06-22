@@ -6,8 +6,14 @@ from typing import Collection, TypeVar
 from .headers_tools import Headers, MutableHeaders
 
 try:
-    from asgiref.typing import Scope
+    from asgiref.typing import (
+        HTTPResponseBodyEvent,
+        HTTPResponseStartEvent,
+        Scope,
+    )
 except ModuleNotFoundError:
+    HTTPResponseBodyEvent = TypeVar("HTTPResponseBodyEvent")
+    HTTPResponseStartEvent = TypeVar("HTTPResponseStartEvent")
     Scope = TypeVar("Scope")
 
 try:
@@ -83,7 +89,6 @@ class DeflateEncoder(BaseEncoder):
         self.compressobj = zlib.compressobj(method=zlib.DEFLATED)
 
     def compress(self, data: bytes, last_chunk: bool = False) -> bytes:
-
         compressed_data = self.compressobj.compress(data)
         if last_chunk:
             compressed_data += self.compressobj.flush(zlib.Z_FINISH)
@@ -98,7 +103,6 @@ class Compressor:
         include_mediatype: Collection[str],
         scope: Scope,
     ) -> None:
-
         self.request_engine_cls = None
         self.minimum_length = minimum_length
         self.include_mediatype = include_mediatype
@@ -115,11 +119,19 @@ class Compressor:
     def __bool__(self):
         return bool(self.request_engine_cls)
 
-    def response_init(self, scope: Scope):
-        self.response_headers = MutableHeaders(scope=scope)
+    def response_init(
+        self,
+        start_event: HTTPResponseStartEvent,
+        body_event: HTTPResponseBodyEvent,
+    ):
+        self.response_headers = MutableHeaders(raw=start_event["headers"])
 
-        content_length = int(
-            self.response_headers.get("content-length", self.minimum_length)
+        has_more_body = body_event.get("more_body", False)
+
+        content_length = (
+            int(self.response_headers.get("content-length", 0))
+            if not has_more_body
+            else float("inf")
         )
         response_mimetype = (
             self.response_headers.get("content-type", "").partition(";")[0].strip()
@@ -134,13 +146,12 @@ class Compressor:
         else:
             self.engine = self.request_engine_cls(response_mimetype)
 
-        return scope
+        body_event["body"] = self.engine.compress(body_event["body"], not has_more_body)
 
-    def modify_response_headers(self):
         if self.engine.encoding_name:
             self.response_headers["content-encoding"] = self.engine.encoding_name
             self.response_headers.add_vary_header("accept-encoding")
-            if "content-length" in self.response_headers:
+            if not has_more_body:
                 self.response_headers["content-length"] = str(
                     self.engine.content_length
                 )
