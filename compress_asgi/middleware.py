@@ -87,5 +87,5 @@ class CompressionResponder:
                     send_event["body"] = self.compressor.engine.compress(
                         send_event["body"], not send_event.get("more_body", False)
                     )
-
+                    
             await self.send(send_event)
